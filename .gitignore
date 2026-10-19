@@ -1,0 +1,113 @@
+# ==========================================
+# ENVIRONMENT VARIABLES AND SECRETS
+# ==========================================
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Local secret/config files
+*.pem
+*.key
+*.p12
+*.pfx
+*.keystore
+service-account*.json
+credentials*.json
+secrets*.json
+
+# ==========================================
+# PYTHON / BACKEND
+# ==========================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+wheels/
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+venv/
+.venv/
+env/
+ENV/
+
+# Backend virtual environments
+backend/venv/
+backend/.venv/
+backend/env/
+
+# ==========================================
+# JAVASCRIPT / FRONTEND
+# ==========================================
+node_modules/
+frontend/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+.npm/
+.yarn/*
+!.yarn/patches/
+!.yarn/plugins/
+!.yarn/releases/
+!.yarn/versions/
+.next/
+.nuxt/
+.vuepress/dist/
+dist/
+build/
+coverage/
+.parcel-cache/
+.vite/
+.turbo/
+
+# Keep package-lock.json, yarn.lock, and pnpm-lock.yaml tracked.
+
+# ==========================================
+# LOGS AND TEMPORARY FILES
+# ==========================================
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+*.swp
+*.swo
+*~
+
+# ==========================================
+# IDE / EDITOR
+# ==========================================
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
+
+# ==========================================
+# OPERATING SYSTEM
+# ==========================================
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# ==========================================
+# TESTS / REPORTS / GENERATED ARTIFACTS
+# ==========================================
+.nyc_output/
+test-results/
+playwright-report/
+artifacts/

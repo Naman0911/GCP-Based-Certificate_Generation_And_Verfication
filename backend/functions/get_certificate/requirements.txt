@@ -1,0 +1,5 @@
+functions-framework>=3.5,<4
+pydantic[email]>=2.6,<3
+cryptography>=42
+firebase-admin>=6.5,<8
+google-cloud-firestore>=2.16,<3

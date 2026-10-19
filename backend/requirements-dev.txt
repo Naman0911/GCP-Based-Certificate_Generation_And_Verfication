@@ -1,0 +1,21 @@
+# Everything needed to develop and test locally (superset of all function requirements).
+functions-framework>=3.5,<4
+pydantic[email]>=2.6,<3
+cryptography>=42
+firebase-admin>=6.5,<8
+google-cloud-firestore>=2.16,<3
+google-cloud-storage>=2.16,<4
+google-cloud-kms>=2.21,<4
+google-crc32c>=1.5
+reportlab>=4.1,<6
+qrcode[pil]>=7.4,<9
+pillow>=10.3
+
+# Testing
+pytest>=8,<10
+pypdf>=4
+PyYAML>=6
+openapi-spec-validator>=0.7
+# Decodes the generated QR code in tests (tests skip the decode check if absent).
+opencv-python-headless>=4.9
+numpy>=1.26

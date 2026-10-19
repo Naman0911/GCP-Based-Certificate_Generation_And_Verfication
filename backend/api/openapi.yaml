@@ -1,0 +1,742 @@
+# Defines API routes, request formats and responses for API Gateway.
+
+openapi: 3.0.3
+info:
+  title: Certificate Generation and Verification API
+  version: 1.0.0
+  description: |
+    REST API for issuing, verifying, revoking and downloading digitally signed
+    certificates.
+
+    **Deployment:** this single file is both the API documentation and the
+    Google Cloud API Gateway configuration (API Gateway supports OpenAPI 3.0.x).
+    The backend URLs and the Identity Platform project ID are written as
+    placeholder tokens that `scripts/render_openapi.py` replaces at deploy time;
+    nothing else changes.
+
+    **Authentication**
+    * `/verify/**` routes are public and return public information only.
+    * `/admin/**` routes require an Identity Platform ID token in
+      `Authorization: Bearer <token>` **and** an administrator account
+      (custom claim `admin: true` or an email in the `ADMIN_EMAILS` allow-list).
+      The token is validated at the gateway and again by the function.
+
+    **Statuses**
+    * `status` in verification responses is the overall outcome:
+      `VALID`, `INVALID`, `REVOKED`, `EXPIRED` or `TAMPERED`.
+    * `metadata_signature_valid` / `pdf_integrity_verified` report cryptographic
+      integrity separately from certificate status.
+      `pdf_integrity_verified` is `null` unless a PDF was uploaded and checked.
+
+    **Errors** always use the `Error` schema. Possible codes: 400, 401, 403,
+    404, 405, 409, 413, 422 and 500.
+
+x-google-api-management:
+  backends:
+    create-certificate:
+      address: "${CREATE_CERTIFICATE_URL}"
+      jwtAudience: "${CREATE_CERTIFICATE_URL}"
+      pathTranslation: APPEND_PATH_TO_ADDRESS
+      deadline: 60
+    list-certificates:
+      address: "${LIST_CERTIFICATES_URL}"
+      jwtAudience: "${LIST_CERTIFICATES_URL}"
+      pathTranslation: APPEND_PATH_TO_ADDRESS
+      deadline: 30
+    get-certificate:
+      address: "${GET_CERTIFICATE_URL}"
+      jwtAudience: "${GET_CERTIFICATE_URL}"
+      pathTranslation: APPEND_PATH_TO_ADDRESS
+      deadline: 30
+    revoke-certificate:
+      address: "${REVOKE_CERTIFICATE_URL}"
+      jwtAudience: "${REVOKE_CERTIFICATE_URL}"
+      pathTranslation: APPEND_PATH_TO_ADDRESS
+      deadline: 30
+    download-certificate:
+      address: "${DOWNLOAD_CERTIFICATE_URL}"
+      jwtAudience: "${DOWNLOAD_CERTIFICATE_URL}"
+      pathTranslation: APPEND_PATH_TO_ADDRESS
+      deadline: 30
+    verify-certificate:
+      address: "${VERIFY_CERTIFICATE_URL}"
+      jwtAudience: "${VERIFY_CERTIFICATE_URL}"
+      pathTranslation: APPEND_PATH_TO_ADDRESS
+      deadline: 30
+    verify-certificate-file:
+      address: "${VERIFY_CERTIFICATE_FILE_URL}"
+      jwtAudience: "${VERIFY_CERTIFICATE_FILE_URL}"
+      pathTranslation: APPEND_PATH_TO_ADDRESS
+      deadline: 30
+
+tags:
+  - name: Verification
+    description: Public verification (no authentication).
+  - name: Administration
+    description: Administrator-only operations.
+
+paths:
+  /verify/{certificate_id}:
+    parameters:
+      - $ref: "#/components/parameters/CertificateId"
+    get:
+      tags: [Verification]
+      operationId: verifyCertificate
+      summary: Verify a certificate record by ID (QR-code target)
+      description: |
+        Recomputes the canonical metadata digest and verifies the metadata
+        signature against the stored KMS key version. **Does not check any PDF**
+        (`pdf_integrity_verified` is always `null` here). Returns `404` with
+        `status: INVALID` when no record exists. Public; never exposes personal
+        data beyond name, course, organisation and dates.
+      x-google-backend: verify-certificate
+      responses:
+        "200":
+          description: Record found (status may be VALID, REVOKED, EXPIRED or TAMPERED).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VerificationResult"
+              examples:
+                valid:
+                  value:
+                    certificate_id: CERT-2026-0123456789ABCDEF0123
+                    record_found: true
+                    status: VALID
+                    certificate_status: VALID
+                    metadata_signature_valid: true
+                    pdf_integrity_verified: null
+                    message: Certificate record and metadata signature verified
+                    verified_at: "2026-10-15T09:30:00Z"
+                    certificate:
+                      certificate_id: CERT-2026-0123456789ABCDEF0123
+                      recipient_name: Asha Verma
+                      course_name: Cloud Architecture
+                      organization_name: Example Academy
+                      issue_date: "2026-10-15T09:00:00Z"
+                      expiry_date: null
+                      status: VALID
+                      revoked_at: null
+        "404":
+          description: No certificate exists with this ID (status INVALID).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VerificationResult"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/ServerError"
+    options:
+      tags: [Verification]
+      operationId: verifyCertificatePreflight
+      summary: CORS preflight
+      x-google-backend: verify-certificate
+      responses:
+        "204":
+          $ref: "#/components/responses/Preflight"
+
+  /verify/{certificate_id}/file:
+    parameters:
+      - $ref: "#/components/parameters/CertificateId"
+    post:
+      tags: [Verification]
+      operationId: verifyCertificateFile
+      summary: Verify an uploaded PDF against the stored digest and signature
+      description: |
+        Hashes the **exact uploaded bytes** with SHA-256, compares them with the
+        stored `pdf_sha256`, verifies `pdf_signature` with the public key of the
+        stored KMS key version and also checks metadata authenticity and the
+        current certificate status. Any difference yields `status: TAMPERED` with
+        `pdf_integrity_verified: false`. The upload size limit is configurable
+        (`MAX_UPLOAD_SIZE_MB`, default 10 MB); content is validated, not just the
+        extension or MIME type. A raw `application/pdf` request body is also
+        accepted.
+      x-google-backend: verify-certificate-file
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: The PDF file to check.
+      responses:
+        "200":
+          description: Record found; see `status` and the separate integrity fields.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VerificationResult"
+        "404":
+          description: No certificate exists with this ID (status INVALID).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VerificationResult"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/ServerError"
+    options:
+      tags: [Verification]
+      operationId: verifyCertificateFilePreflight
+      summary: CORS preflight
+      x-google-backend: verify-certificate-file
+      responses:
+        "204":
+          $ref: "#/components/responses/Preflight"
+
+  /admin/certificates:
+    post:
+      tags: [Administration]
+      operationId: createCertificate
+      summary: Issue a certificate
+      description: |
+        Validates the request, generates a unique ID, signs the canonical
+        metadata with Cloud KMS, renders the PDF with a QR code, signs the exact
+        PDF bytes, stores the PDF privately in Cloud Storage and the record in
+        Firestore, and returns a short-lived signed download URL.
+        The issuing administrator is taken from the verified token, never from
+        the body. Audit event: `CERTIFICATE_CREATED`.
+      x-google-backend: create-certificate
+      security:
+        - firebase: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCertificateRequest"
+      responses:
+        "201":
+          description: Certificate issued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CertificateCreated"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/ServerError"
+    get:
+      tags: [Administration]
+      operationId: listCertificates
+      summary: List certificates (paginated, newest first)
+      description: |
+        Cursor pagination: pass `next_page_token` from the previous response as
+        `page_token`. `status` filters on the *stored* status; `effective_status`
+        in each item also reflects expiry that has not yet been persisted.
+      x-google-backend: list-certificates
+      security:
+        - firebase: []
+      parameters:
+        - name: page_size
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 25
+        - name: page_token
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 256
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [VALID, REVOKED, EXPIRED]
+      responses:
+        "200":
+          description: A page of certificates.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CertificateList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/ServerError"
+    options:
+      tags: [Administration]
+      operationId: certificatesPreflight
+      summary: CORS preflight
+      x-google-backend: list-certificates
+      responses:
+        "204":
+          $ref: "#/components/responses/Preflight"
+
+  /admin/certificates/{certificate_id}:
+    parameters:
+      - $ref: "#/components/parameters/CertificateId"
+    get:
+      tags: [Administration]
+      operationId: getCertificate
+      summary: Get certificate details
+      x-google-backend: get-certificate
+      security:
+        - firebase: []
+      responses:
+        "200":
+          description: Certificate details (hashes and key version, no PDF).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CertificateDetail"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/ServerError"
+    options:
+      tags: [Administration]
+      operationId: getCertificatePreflight
+      summary: CORS preflight
+      x-google-backend: get-certificate
+      responses:
+        "204":
+          $ref: "#/components/responses/Preflight"
+
+  /admin/certificates/{certificate_id}/revoke:
+    parameters:
+      - $ref: "#/components/parameters/CertificateId"
+    patch:
+      tags: [Administration]
+      operationId: revokeCertificate
+      summary: Revoke a certificate
+      description: |
+        Atomically (Firestore transaction) marks the certificate `REVOKED`,
+        recording time, actor and reason. The record and the original PDF are
+        preserved. Later verification never reports it as valid. A second
+        revocation returns 409. Audit event: `CERTIFICATE_REVOKED`.
+      x-google-backend: revoke-certificate
+      security:
+        - firebase: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RevokeCertificateRequest"
+      responses:
+        "200":
+          description: Certificate revoked.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CertificateDetail"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/ServerError"
+    options:
+      tags: [Administration]
+      operationId: revokeCertificatePreflight
+      summary: CORS preflight
+      x-google-backend: revoke-certificate
+      responses:
+        "204":
+          $ref: "#/components/responses/Preflight"
+
+  /admin/certificates/{certificate_id}/download:
+    parameters:
+      - $ref: "#/components/parameters/CertificateId"
+    get:
+      tags: [Administration]
+      operationId: downloadCertificate
+      summary: Get a short-lived signed URL for the certificate PDF
+      description: |
+        Returns a V4 signed Cloud Storage URL that expires after
+        `SIGNED_URL_EXPIRATION_MINUTES`. The bucket stays private. Audit event:
+        `DOWNLOAD_URL_ISSUED`.
+      x-google-backend: download-certificate
+      security:
+        - firebase: []
+      responses:
+        "200":
+          description: Signed download URL.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DownloadResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "500":
+          $ref: "#/components/responses/ServerError"
+    options:
+      tags: [Administration]
+      operationId: downloadCertificatePreflight
+      summary: CORS preflight
+      x-google-backend: download-certificate
+      responses:
+        "204":
+          $ref: "#/components/responses/Preflight"
+
+components:
+  securitySchemes:
+    firebase:
+      type: oauth2
+      description: Identity Platform (Firebase) ID token sent as a Bearer token.
+      flows:
+        implicit:
+          authorizationUrl: ""
+          scopes: {}
+      x-google-auth:
+        issuer: "https://securetoken.google.com/${IDENTITY_PLATFORM_PROJECT_ID}"
+        jwksUri: "https://www.googleapis.com/service_accounts/v1/metadata/x509/securetoken@system.gserviceaccount.com"
+        audiences:
+          - "${IDENTITY_PLATFORM_PROJECT_ID}"
+
+  parameters:
+    CertificateId:
+      name: certificate_id
+      in: path
+      required: true
+      description: Certificate ID, for example `CERT-2026-0123456789ABCDEF0123`.
+      schema:
+        type: string
+        pattern: "^CERT-[0-9]{4}-[0-9A-F]{20}$"
+
+  responses:
+    BadRequest:
+      description: Malformed request (for example invalid JSON).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Unauthorized:
+      description: Missing, invalid or expired credentials.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Forbidden:
+      description: Authenticated but not an administrator.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: Certificate not found.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Conflict:
+      description: Conflict with current state (for example already revoked).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    PayloadTooLarge:
+      description: Request or upload exceeds the size limit.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    ValidationError:
+      description: Request failed validation (fields listed in `error.details`).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    ServerError:
+      description: Internal error. No internal details are returned; quote `request_id`.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Preflight:
+      description: CORS preflight accepted.
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, request_id]
+          properties:
+            code:
+              type: string
+              example: validation_error
+            message:
+              type: string
+            request_id:
+              type: string
+            details:
+              type: array
+              items:
+                type: object
+                properties:
+                  field:
+                    type: string
+                  message:
+                    type: string
+                  type:
+                    type: string
+
+    CreateCertificateRequest:
+      type: object
+      additionalProperties: false
+      required: [recipient_name, course_name, organization_name]
+      properties:
+        recipient_name:
+          type: string
+          minLength: 1
+          maxLength: 120
+          example: Asha Verma
+        recipient_email:
+          type: string
+          format: email
+          maxLength: 254
+          nullable: true
+          description: Optional; stored and signed but never shown publicly or placed in the QR code.
+        course_name:
+          type: string
+          minLength: 1
+          maxLength: 200
+          example: Cloud Architecture Fundamentals
+        organization_name:
+          type: string
+          minLength: 1
+          maxLength: 200
+          example: Example Academy
+        expiry_date:
+          type: string
+          format: date-time
+          nullable: true
+          description: Optional ISO 8601 timestamp; must be in the future.
+
+    RevokeCertificateRequest:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          minLength: 3
+          maxLength: 500
+          example: Issued in error
+
+    PublicCertificate:
+      type: object
+      properties:
+        certificate_id:
+          type: string
+        recipient_name:
+          type: string
+        course_name:
+          type: string
+        organization_name:
+          type: string
+        issue_date:
+          type: string
+          format: date-time
+        expiry_date:
+          type: string
+          format: date-time
+          nullable: true
+        status:
+          type: string
+          enum: [VALID, REVOKED, EXPIRED]
+        revoked_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    VerificationResult:
+      type: object
+      required: [certificate_id, record_found, status, message]
+      properties:
+        certificate_id:
+          type: string
+        record_found:
+          type: boolean
+        status:
+          type: string
+          enum: [VALID, INVALID, REVOKED, EXPIRED, TAMPERED]
+          description: Overall outcome.
+        certificate_status:
+          type: string
+          enum: [VALID, REVOKED, EXPIRED]
+          nullable: true
+          description: Certificate status now, separate from cryptographic integrity.
+        metadata_signature_valid:
+          type: boolean
+          nullable: true
+          description: Whether the recomputed metadata digest and its KMS signature verified.
+        pdf_integrity_verified:
+          type: boolean
+          nullable: true
+          description: "`null` unless a PDF was uploaded; true only if its bytes match the stored digest and signature."
+        message:
+          type: string
+        verified_at:
+          type: string
+          format: date-time
+        certificate:
+          allOf:
+            - $ref: "#/components/schemas/PublicCertificate"
+          nullable: true
+
+    CertificateSummary:
+      type: object
+      properties:
+        certificate_id:
+          type: string
+        recipient_name:
+          type: string
+        recipient_email:
+          type: string
+          nullable: true
+        course_name:
+          type: string
+        organization_name:
+          type: string
+        issue_date:
+          type: string
+          format: date-time
+        expiry_date:
+          type: string
+          format: date-time
+          nullable: true
+        status:
+          type: string
+          enum: [VALID, REVOKED, EXPIRED]
+          description: Stored status.
+        effective_status:
+          type: string
+          enum: [VALID, REVOKED, EXPIRED]
+          description: Status right now (includes expiry not yet persisted).
+        created_at:
+          type: string
+          format: date-time
+        created_by:
+          type: string
+        revoked_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    CertificateDetail:
+      allOf:
+        - $ref: "#/components/schemas/CertificateSummary"
+        - type: object
+          properties:
+            pdf_sha256:
+              type: string
+            metadata_sha256:
+              type: string
+            signature_algorithm:
+              type: string
+              example: RSA_SIGN_PKCS1_3072_SHA256
+            kms_key_version:
+              type: string
+            revoked_by:
+              type: string
+              nullable: true
+            revocation_reason:
+              type: string
+              nullable: true
+
+    CertificateCreated:
+      type: object
+      properties:
+        certificate_id:
+          type: string
+        verification_url:
+          type: string
+          format: uri
+        certificate:
+          $ref: "#/components/schemas/CertificateSummary"
+        download_path:
+          type: string
+          description: Path of the endpoint that issues a fresh signed URL.
+        download:
+          type: object
+          nullable: true
+          description: Signed URL, or null if it could not be created (use download_path).
+          properties:
+            url:
+              type: string
+              format: uri
+            expires_at:
+              type: string
+              format: date-time
+
+    CertificateList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/CertificateSummary"
+        page_size:
+          type: integer
+        next_page_token:
+          type: string
+          nullable: true
+
+    DownloadResponse:
+      type: object
+      properties:
+        certificate_id:
+          type: string
+        url:
+          type: string
+          format: uri
+        expires_at:
+          type: string
+          format: date-time
+        method:
+          type: string
+          enum: [GET]
